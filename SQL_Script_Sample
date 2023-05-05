@@ -1,0 +1,1252 @@
+-----------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+-- INPUT DATA FOR EBR TABLEAU
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------
+call data_analytics.additional_metrics();
+		
+/*			
+-- procedure FUNCTIONS
+
+*/	 
+
+-----------------------------------------------------------------------------------------------
+-- 1ST PAGE OF TABLEAU 
+-------------------------------------------------------------------------------------------------
+-- WE GET THE REAL METRICS FOR EACH PARTNER. (FOR THE MOMENT WE TAKE ALL ACTIVE PARTNERS)
+-- Max closed year
+
+truncate table data_analytics.AD_00_main_metrics;
+--Create Table data_analytics.AD_00_main_metrics as
+insert into data_analytics.AD_00_main_metrics
+select distinct
+A.country_code, 
+CO.cntry_name, 
+A.partner_code, 
+deal_id,
+months_age,
+case when gs_status = 'DARK_STORE' then 'dark_store'
+	 when months_age < 4 then 'start' 	 
+	 when months_age <= 12 then 'growth' 
+	 else 'maturity' end as maturity,
+case when "level" = '2' then 'sales' 
+	 when "level" = '3' then 'total_consumer' 
+	 else 'incomes' end as dependence,
+tree,
+"level",
+metric, 
+cast(ddate as date), 
+round(value,2) as Value,
+round(avg(value) over (partition by country_code, metric, ddate, case when months_age < 0 then 'dark_store'
+	 																  when months_age < 4 then 'start' 
+	 																  when months_age <= 12 then 'growth' 
+	 																  else 'maturity' end),2) as avg_country,
+column1,
+column2,
+null as column3
+from (select distinct partner_code, country_code, tree, "level", metric, ddate, max(value) as value, MAX(column1) column1, MAX(column2) column2 from
+/*Get New and Total consumers*/
+	  ((select distinct partner_code, country_code,'incomes' as tree, '3' as "level", metric, date_trunc('month', ddate) ddate, sum(value) as value, cast(null as integer) as column1, cast(null as integer) as column2
+				from kpi_core.kpi_scorecard_operative
+				where (periodicity = 'daily'	
+				and vertical_code = 'LAUNDRY'
+				and service = 'all'
+				and metric in ('new_consumer'))
+				group by partner_code, country_code, metric, date_trunc('month', ddate)
+				union (select distinct partner_code, country_code,'incomes' as tree, '3' as "level", 'new_consumer' as metric,date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+				from kpi_core.kpi_scorecard_operative
+				where vertical_code = 'LAUNDRY')) 
+union (select distinct partner_code, country_code,'incomes' as tree, '2' as "level",'total_consumer' as metric, date_trunc('month', ddate) ddate, sum(value) as value, cast(null as integer) as column1, cast(null as integer) as column2
+				from kpi_core.kpi_scorecard_operative
+				where (periodicity = 'monthly'	
+				and vertical_code = 'LAUNDRY'
+				and service = 'all'
+				and metric in ('active_consumer'))
+				group by partner_code, country_code, metric, date_trunc('month', ddate)
+				union (select distinct partner_code, country_code,'incomes' as tree, '2' as "level", 'total_consumer' as metric, date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+				from kpi_core.kpi_scorecard_operative
+				where vertical_code = 'LAUNDRY')) 				
+/*Get Sales*/
+union (select distinct partner_code, country_code,'incomes' as tree, '1' as "level", metric, date_trunc('month', ddate) ddate, sum(value_local_currency) as value, cast(null as integer) as column1, cast(null as integer) as column2
+				from kpi_core.kpi_scorecard_income 
+				where periodicity = 'daily'
+				and vertical_code = 'LAUNDRY'
+				and metric = 'sales'
+				group by partner_code, country_code, metric, date_trunc('month', ddate)
+				union (select distinct partner_code, country_code,'incomes' as tree, '1' as "level", 'sales' as metric, date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+				from kpi_core.kpi_scorecard_income
+				where vertical_code = 'LAUNDRY'))
+/*Get Average Ticket*/
+union (select distinct partner_code, country_code,'incomes' as tree, '2' as "level", metric, date_trunc('month', ddate) ddate, value_local_currency as value, cast(null as integer) as column1, cast(null as integer) as column2
+				from kpi_core.kpi_scorecard_income 
+				where periodicity = 'monthly'
+				and vertical_code = 'LAUNDRY'
+				and service = 'all'
+				and metric = 'avg_ticket'
+				union (select distinct partner_code, country_code,'incomes' as tree, '2' as "level", 'avg_ticket' as metric, date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+				from kpi_core.kpi_scorecard_income
+				where vertical_code = 'LAUNDRY'))
+/*Get Recurrence with columns additionals*/
+union (select A.* ,column1,column2 from
+		(select distinct partner_code, country_code,'incomes' as tree, '2' as "level", 'recurrence' as metric, date_trunc('month', ddate) ddate, sum(value) as value
+				from kpi_core.kpi_scorecard_operative			
+				where (periodicity = 'monthly'
+				and vertical_code = 'LAUNDRY'
+				and metric = 'recurrence')
+				group by partner_code, country_code, date_trunc('month', ddate)) A
+		left join (select distinct partner_code, date_trunc('month', ddate)::date as ddate,count(1) column1,count(distinct cust_src_id) column2
+    				FROM kpi_core.kpi_purchase 
+    				WHERE service ='orders'
+        			and vertical_code in ('LAUNDRY') 
+					group by partner_code,date_trunc('month', ddate)::date) B on A.partner_code = B.partner_code and A.ddate = B.ddate
+		union (select distinct partner_code, country_code,'incomes' as tree, '2' as "level", 'recurrence' as metric, date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+				from kpi_core.kpi_scorecard_operative
+				where vertical_code = 'LAUNDRY'))
+/*We get retention new customers for a month 
+ * (percentage of difference between new id customers from last month who consumed a product or service and those who consumed the closed month)*/
+union (select distinct partner_code, country_code,'incomes' as tree, '3' as "level", 'retention_nc_1m' as metric, date_trunc('month', ddate) ddate, value as value, first_month_count as column1, retention_month_count as column2
+		from data_analytics.temp_retention_m2_AD
+		where metric = 'retention_m2'
+		and periodicity = 'monthly'
+		and service = 'all'
+		and vertical_code = 'LAUNDRY'
+		union (select distinct partner_code, country_code,'incomes' as tree, '3' as "level", 'retention_nc_1m' as metric, date_trunc('month',ex_date - interval '1' month), 0 as value, cast(null as integer) as column1, cast(null as integer) as column2  
+		from data_analytics.temp_retention_m2_ad
+		where vertical_code = 'LAUNDRY'))) A
+		group by partner_code, country_code,tree,"level",metric, ddate) A
+/*BY gainsight partners opening date*/
+inner join (	
+Select distinct gs_hubspot_deal_id as deal_id, gs_prtn_code,UPPER(gs_status) as gs_status ,gs_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_opening_date))) as months_age
+			from kpi_core.gainsight_partner 
+			where gs_prtn_code is not null
+			and UPPER(gs_status) = 'ACTIVE'
+			and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')
+		union (select gs_hubspot_deal_id as deal_id, gs_prtn_code, 'DARK_STORE' as gs_status, gs_dark_store_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_dark_store_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_dark_store_opening_date))) as months_age
+				from kpi_core.gainsight_partner 
+				where gs_dark_store is true)) C on gs_prtn_code = A.partner_code			
+left join kpi_core.dim_country CO on CO.country_id = A.country_code 
+/*Filter of time*/
+	where ddate >= date_trunc('month',ex_date - interval '12' month) -- at least we get 1 year ago
+		and ddate > date_trunc('month',gs_opening_date)-- before opening date (for some examples)
+		;
+
+-----------------------------------------------------------------------------------------------------
+-- Comparison with the estimated. For each KPI
+-----------------------------------------------------------------------------------------------------
+	
+--***** THE OBJECTIVES OVER 2 YEARS ARE FIXED /// WHEN WE CHANGE THE MEASSURE FOR IDEAL VALUES WE HAVE TO CHANGE THAT	
+	
+
+--SALES COMPARISON
+--We only consider sales of the last month to compare (but here we have all comparison last year too). And we dont create M0 o Values to create objectives for Sales
+
+truncate table data_analytics.AD_01_est_sales;
+--CREATE TABLE data_analytics.AD_01_est_sales AS 
+insert into data_analytics.AD_01_est_sales
+select distinct
+A.country_code,
+A.cntry_name,
+A.partner_code,
+A.deal_id,
+A.months_age,
+A.maturity,
+A.tree,
+A."level",
+A.metric,
+A.ddate,
+A.value,
+A.avg_country,
+A.column1,
+A.column2,
+month_check,
+A.tier,
+C.good as good,
+round(A.value / nullif(C.good,0),2)-1 as diff_estimated_M1,
+mounth_1, 
+mounth_2,
+mounth_3
+case when A.value < C.good then 'bad' else 'good' end as segment,
+m1_m2_diff
+from (select A.*, case when MA.id_month > 36 then 36 else MA.id_month end as month_check,
+				  case when A.country_code in ('MX','CL','ZA') and stratum = 'High' then 't1'
+					   when A.country_code in ('MX','CL','ZA') and stratum = 'Medium' then 't2'
+					   when A.country_code in ('MX','CL','ZA') and stratum = 'Low' then 't3'
+					   else 't2' end as tier
+from data_analytics.AD_00_main_metrics A
+left join data_analytics.ad_ext3_stratum_partner B on A.partner_code = B.metabase
+left join (Select distinct partner_code, ddate, ((DATE_PART('year', ddate) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', ddate) - DATE_PART('month', gs_opening_date))) as id_month
+			from data_analytics.AD_00_main_metrics A
+			inner join (Select distinct gs_hubspot_deal_id as deal_id, gs_prtn_code,UPPER(gs_status) as gs_status ,gs_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_opening_date))) as months_age
+							from kpi_core.gainsight_partner 
+							where gs_prtn_code is not null
+								and UPPER(gs_status) = 'ACTIVE'
+								and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')
+							union (select gs_hubspot_deal_id as deal_id, gs_prtn_code, 'DARK_STORE' as gs_status, gs_dark_store_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_dark_store_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_dark_store_opening_date))) as months_age
+									from kpi_core.gainsight_partner 
+										where gs_dark_store is true)) B on A.partner_code = B.gs_prtn_code
+			order by partner_code, id_month) MA on A.partner_code = MA.partner_code and A.ddate = MA.ddate
+where metric = 'sales') A
+left join (select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+-- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date- interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date- interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff 
+         from data_analytics.AD_00_main_metrics 
+         where metric= 'sales' and ddate >= date_trunc('month',ex_date- interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) S on A.partner_code = S.partner_code
+left join (select *  from data_analytics.ad_ext1_ideal_values where metric= 'sales') C on A.country_code = C.country_code and A.tier = C.tier and A.month_check = C.id_month
+;
+
+
+------------------------------------------------------	
+	
+-- NEW Consumers
+truncate table data_analytics.AD_01a_est_new_consumer;
+--CREATE TABLE data_analytics.AD_01a_est_new_consumer AS 
+insert into data_analytics.AD_01a_est_new_consumer
+select distinct
+A.country_code, partner_code, maturity, months_age, A.metric, month_3, month_2, month_1, coalesce(B.id_month,24) as Month_check, coalesce(B.good,48) as Good, coalesce(B.bad,32) as bad, M1_M2_diff,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,32)*20)/100  then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when maturity = 'maturity' then round(month_1+(5/month_1))
+	 when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 when maturity = 'start' then coalesce(month_1,0) end as M0,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,32)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 when maturity = 'maturity' then round(month_1)
+	 when maturity = 'growth' then round(month_1) 
+	 when maturity = 'start' then coalesce(month_1,0) end as base_number,
+case when (case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,32)*30)/100  then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+				when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) <= coalesce(cast(B.bad as decimal),32) then 'bad'
+	 when (case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,32)*30)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) >  coalesce(B.good,48) then 'good'
+	 else 'regular' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+         -- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff  
+         from data_analytics.AD_00_main_metrics 
+         where metric= 'new_consumer' and ddate >= date_trunc('month',ex_date - interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) as A
+left join (select * from data_analytics.ad_ext1_ideal_values where metric= 'new_consumer') B on A.months_age = B.id_month ;
+
+
+----------------------------------------------------
+			
+-- Total Consumers	
+truncate table data_analytics.AD_01b_est_total_consumers;
+--CREATE TABLE data_analytics.AD_01b_est_total_consumers AS 
+insert into data_analytics.AD_01b_est_total_consumers
+select distinct
+A.country_code, partner_code, maturity, months_age, A.metric, month_3, month_2, month_1, coalesce(B.id_month,24) as Month_check, coalesce(B.good,292) as Good, coalesce(B.bad,175) as bad, M1_M2_diff,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,175)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when maturity = 'maturity' then round(month_1+(5/month_1))
+	 when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 when maturity = 'start' then coalesce(month_1,0) end as M0,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,175)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 when maturity = 'maturity' then round(month_1)
+	 when maturity = 'growth' then round(month_1) 
+	 when maturity = 'start' then coalesce(month_1,0) end as base_number,
+case when (case when M1_M2_diff <=-40 and abs(month_1-month_2) < (coalesce(B.bad,175)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+				when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) <= coalesce(B.bad,175) then 'bad'
+	 when (case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,175)*20)/100then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) >  coalesce(B.good,292) then 'good'
+	 else 'regular' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+         -- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff  
+        from data_analytics.AD_00_main_metrics 
+         where metric= 'total_consumer' and ddate >= date_trunc('month',ex_date - interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) as A
+left join (select *  from data_analytics.ad_ext1_ideal_values where metric= 'total_consumer') B on A.months_age = B.id_month ;
+
+-----------------------------------------------------
+			
+-- Recurrence
+truncate table data_analytics.AD_01c_est_recurrence;
+--CREATE TABLE data_analytics.AD_01c_est_recurrence AS 
+insert into data_analytics.AD_01c_est_recurrence
+select distinct
+A.country_code, partner_code, maturity, months_age, A.metric, month_3, month_2, month_1, coalesce(B.id_month,24) as Month_check, coalesce(B.good,2.0) as Good, coalesce(B.bad,1.8) as bad, M1_M2_diff,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,1.8)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when maturity = 'maturity' then round(month_1+(5/month_1))
+	 when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 when maturity = 'start' then coalesce(month_1,0) end as M0,
+case when (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)) = 0 then 1
+	 when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,1.8)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 when maturity = 'maturity' then round(month_1)
+	 when maturity = 'growth' then round(month_1)
+	 when maturity = 'start' then coalesce(month_1,0) end as base_number,
+case when (case when (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)) = 0 then 1
+				when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,1.8)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+				when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) <= coalesce(B.bad,1.8) then 'bad'
+	 when (case when (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)) = 0 then 1
+		 		when M1_M2_diff <=-40 and abs(month_1-month_2) > (coalesce(B.bad,1.8)*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) >  coalesce(B.good,2) then 'good'
+	 else 'regular' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+         -- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff  
+         from data_analytics.AD_00_main_metrics 
+         where metric= 'recurrence' and ddate >= date_trunc('month',ex_date - interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) as A
+left join (select * from data_analytics.ad_ext1_ideal_values where metric= 'recurrence') B on A.months_age = B.id_month ;
+		
+-----------------------------------------
+
+-- Retention new consumers
+truncate table data_analytics.AD_01d_est_retention_nc;
+--CREATE TABLE data_analytics.AD_01d_est_retention_nc AS 
+insert into data_analytics.AD_01d_est_retention_nc
+select distinct
+A.country_code, partner_code, maturity, months_age, metric, month_3, month_2, month_1, months_age as Month_check, 25 as Good, 20 as bad, M1_M2_diff,
+case when M1_M2_diff <=-95 then (60*20)/100
+	 when M1_M2_diff <=-40 and abs(month_1-month_2) > (30*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when maturity = 'maturity' then round(month_1+(5/nullif(month_1,0)))
+	 when maturity = 'growth' then round(month_1+(15/nullif(month_1,0))) 
+	 when maturity = 'start' then coalesce(month_1,0) end as M0,
+case when M1_M2_diff <=-95 then (60*20)/100
+	 when M1_M2_diff <=-40 and abs(month_1-month_2) > (30*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 when maturity = 'maturity' then round(month_1)
+	 when maturity = 'growth' then round(month_1) 
+	 when maturity = 'start' then coalesce(month_1,0) end as base_number,
+case when (case when M1_M2_diff <=-95 then (60*20)/100
+	 			when M1_M2_diff <=-40 and abs(month_1-month_2) > (30*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+				when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/nullif(month_1,0)))
+	 			when maturity = 'growth' then round(month_1+(15/nullif(month_1,0))) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) <= coalesce(20) then 'bad'
+	 when (case when M1_M2_diff <=-95 then (60*20)/100
+	 		 	when M1_M2_diff <=-40 and abs(month_1-month_2) > (30*20)/100 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when maturity = 'maturity' then round(month_1+(5/nullif(month_1,0)))
+	 			when maturity = 'growth' then round(month_1+(15/nullif(month_1,0))) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) >  coalesce(25) then 'good'		
+	 else 'regular' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+-- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff  
+         from data_analytics.AD_00_main_metrics 
+         where metric= 'retention_nc_1m' and ddate >= date_trunc('month',ex_date - interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) as A;
+
+----------------------------------------------
+-- AVG TICKET        
+-- FOR AVG TICKET WE MUST TO COMPARE THE RESULT WITH THE MODEL AND THE COUNTRY MODEL			
+
+-- COUNTRY MODEL LAST MONTH      	
+truncate table data_analytics.AD_01e_est_avg_ticket;
+--CREATE TABLE data_analytics.AD_01e_est_avg_ticket AS 
+insert into data_analytics.AD_01e_est_avg_ticket
+select distinct 
+A.country_code, A.partner_code, maturity, months_age, A.metric, month_3, month_2, month_1, months_age as Month_check,  (case when current_model > model then current_model else model end) as Good,  
+(case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2)  as bad,
+M1_M2_diff,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > ((case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2))*20/100
+																			then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when maturity = 'maturity' then round(month_1+(5/month_1))
+	 when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 when maturity = 'start' then coalesce(month_1,0) end as M0,
+case when M1_M2_diff <=-40 and abs(month_1-month_2) > ((case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2))*20/100
+																			then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 when maturity = 'maturity' then round(month_1)
+	 when maturity = 'growth' then round(month_1) 
+	 when maturity = 'start' then coalesce(month_1,0) end as base_number, 
+case when (case when M1_M2_diff <=-40 and abs(month_1-month_2) > ((case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2))*20/100  
+																			then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+				when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) < (case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2) then  'bad'
+	 when (case when M1_M2_diff <=-40 and abs(month_1-month_2) > ((case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2))*20/100  
+																			then ((month_1+(SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima)))/2)
+	 			when M1_M2_diff <20 then (SELECT MAX(filaMaxima) FROM ( VALUES(month_3),(month_2),(month_1)) AS UNIQUECOLUMN(filaMaxima))
+	 			when maturity = 'maturity' then round(month_1+(5/month_1))
+	 			when maturity = 'growth' then round(month_1+(15/month_1)) 
+	 			when maturity = 'start' then coalesce(month_1,0) end) >= (case when current_model > model then current_model else model end)*0.95 then 'good'
+	 else 'regular' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) as month_1,
+-- create the diff m2-m1       
+         case when max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',ex_date - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',ex_date - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff 
+         from data_analytics.AD_00_main_metrics 
+         where metric= 'avg_ticket' and ddate >= date_trunc('month',ex_date - interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) as A
+left join (select A.ord_country_code as country_code, Round(avg(A.ord_total_products_price) ,2) as current_model, round(avg(cast(B.ct_avg_ticket as decimal)),2) as model
+			from kpi_core.kpi_order A
+			left join data_analytics.ad_ext2_avgticket_country B on A.ord_country_code = B.country_code
+			where ord_type_code = 'B2C' and lower(prtn_code) not like '%-ll%'
+			and (date_trunc('month',ex_date - interval '1' month) <= (date_trunc('month',A.ord_creation_date_time))
+			and date_trunc('month',A.ord_creation_date_time)  < date_trunc('month',ex_date))
+			group by A.ord_country_code ) B on A.country_code = B.country_code ;
+
+--------------------------------------------------------------------------------------------------------------
+-- Priorize of each KPI for create objective
+--------------------------------------------------------------------------------------------------------------	
+
+truncate table data_analytics.AD_02_priorization_objs;
+--CREATE TABLE data_analytics.AD_02_priorization_objs AS 
+insert into data_analytics.AD_02_priorization_objs				
+select distinct A.partner_code ,A.country_code, A.months_age, A.maturity , A.metric, A.M1_M2_diff, diff_M0_estimated, good, bad,
+			---- BASE NUMBER CREATION TO USE ON NEXT QUERY
+			round(case when base_number >= round(bad*0.6) then base_number
+				 when base_number >= round((bad*0.6)*0.85) then bad*0.6
+				 when base_number >= round((bad*0.6)*0.65) then (case when A.maturity = 'growth' and A.M1_M2_diff >= 20 then (bad*0.6)/1.25 
+				 											  		  when A.maturity = 'growth' and A.M1_M2_diff < 20 then  (bad*0.6)/1.15
+				 											   		  when A.maturity = 'maturity' and A.M1_M2_diff >= 20 then (bad*0.6)/1.10
+				 											  		  when A.maturity = 'maturity' and A.M1_M2_diff < 20 then  (bad*0.6)/1.08 end)
+				 else (case when A.maturity = 'growth' and A.M1_M2_diff >= 20 then (bad*0.45)/1.25 
+				 			when A.maturity = 'growth' and A.M1_M2_diff < 20 then (bad*0.45)/1.15
+				 			when A.maturity = 'maturity' and A.M1_M2_diff >= 20 then (bad*0.45)/1.10
+				 			when A.maturity = 'maturity' and A.M1_M2_diff < 20 then (bad*0.45)/1.08 end) end ,2)as base_number											  
+			, A.m0, A.segment, 
+			to_number("level",'9') as priority,
+			case when maturity = 'start' then 0
+				 when A.metric = 'sales' then 0
+				 when S.segment = 'good' then 
+						(case when "level" = '2' and A.segment in ('regular','bad') then 1 
+							  when TC.segment in ('regular','bad') and A.segment in ('regular','bad') and maturity = 'maturity' and metric = 'retention_nc_1m' then 1
+							  when TC.segment in ('regular','bad') and A.segment in ('regular','bad') and maturity = 'growth' and metric = 'new_consumer' then 1
+							  else 0 end)
+				 else (case when "level" = '2' and A.segment in ('regular','bad') then 1
+				 		    when A.segment in ('regular','bad') and TC.segment in ('regular','bad') and metric = 'retention_nc_1m' and maturity = 'maturity' then 1 
+				 		    when A.segment in ('regular','bad') and TC.segment in ('regular','bad') and NC.segment = 'good' and metric = 'retention_nc_1m' and maturity = 'growth' then 1 
+				 		    when A.segment in ('regular','bad') and TC.segment in ('regular','bad') and metric = 'new_consumer' and maturity = 'growth' then 1
+				 		    when A.segment in ('regular','bad') and TC.segment in ('regular','bad') and RT.segment = 'good' and metric = 'new_consumer' and maturity = 'maturity' then 1 
+				 		    else 0 end)
+				 end as sp_action
+from (select distinct partner_code ,country_code, months_age, maturity , metric, M1_M2_diff, m0, month_1, month_2, month_3, bad, good, diff_M0_estimated, base_number as first_BN, segment as first_segment, "level", tree,
+			------ ADJUSTMENT FOR BAD LMV and GOOD CATEGORY
+						case when A.M1_M2_diff between -5 and 5 and A.segment = 'good' and 
+								(case when A.M1_M2_diff between -5 and 5 and A.segment = 'good' then 
+										(case when (month_1+ month_2+ month_3)/3 > (month_1+ month_2)/2 then 
+													(case when ((month_1+ month_2+ month_3)/3+(month_1+ month_2)/2)/2 >= good then 'good'
+													 	  when ((month_1+ month_2+ month_3)/3+(month_1+ month_2)/2)/2 < bad then 'bad'
+													 	  else 'regular' end) end) end) in ('bad','regular') then ((month_1+ month_2+ month_3)/3+(month_1+ month_2)/2)/2 else base_number end as base_number,
+						case when metric not in ('sales') and (M1_M2_diff is null or m0 is null) then 'bad' 
+							 when A.M1_M2_diff between -5 and 5 and A.segment = 'good' then 
+										(case when (month_1+ month_2+ month_3)/3 > (month_1+ month_2)/2 then 
+													(case when ((month_1+ month_2+ month_3)/3+(month_1+ month_2)/2)/2 >= good then 'good'
+													 	  when ((month_1+ month_2+ month_3)/3+(month_1+ month_2)/2)/2 < bad then 'bad'
+													 	  else 'regular' end ) else segment end)
+							 else segment						 	  
+							 end as segment from 
+	  (select partner_code ,country_code, months_age, maturity ,'total_consumer' as dependency,'incomes' as tree, '3' as "level", metric, M1_M2_diff, base_number, m0, month_1, month_2, month_3, bad, round(cast(M0/good as decimal),2) as diff_M0_estimated, good, segment from data_analytics.AD_01a_est_new_consumer 
+union (select partner_code ,country_code, months_age, maturity ,'sales' as dependency,'incomes' as tree, '2' as "level", metric, M1_M2_diff, base_number, m0, month_1, month_2, month_3, bad, round(cast(M0/good as decimal),2) as diff_M0_estimated, good, segment from data_analytics.AD_01b_est_total_consumers )
+union (select partner_code ,country_code, months_age, maturity ,'sales' as dependency,'incomes' as tree, '2' as "level", metric, M1_M2_diff, base_number, m0, month_1, month_2, month_3, bad, round(cast(M0/good as decimal),2) as diff_M0_estimated, good, segment from data_analytics.AD_01c_est_recurrence )
+union (select partner_code ,country_code, months_age, maturity ,'total_consumer' as dependency,'incomes' as tree, '3' as "level", metric, M1_M2_diff, base_number, m0, month_1, month_2, month_3, bad, round(cast(M0/good as decimal),2) as diff_M0_estimated, good, segment from data_analytics.AD_01d_est_retention_nc )
+union (select partner_code ,country_code, months_age, maturity ,'sales' as dependency,'incomes' as tree, '2' as "level", metric, M1_M2_diff, base_number, m0, month_1, month_2, month_3, bad, round(cast(M0/good as decimal),2) as diff_M0_estimated, good, segment from data_analytics.AD_01e_est_avg_ticket )
+union (select partner_code ,country_code, months_age, maturity ,'incomes' as dependency,'incomes' as tree, '1' as "level", metric, M1_M2_diff, null as base_number, null as m0, month_1, month_2, month_3, good as bad, diff_estimated_m1 as diff_M0_estimated, good, segment from data_analytics.AD_01_est_sales
+		where ddate = date_trunc('month',ex_date - interval '1' month))) A
+		) A
+left join (select partner_code, country_code, segment from data_analytics.ad_01_est_sales where ddate = date_trunc('month',ex_date  - interval '1' month)) S
+		on A.partner_code = S.partner_code
+left join (select partner_code, country_code, segment
+from data_analytics.AD_01b_est_total_consumers) TC on A.partner_code = TC.partner_code	
+left join (select partner_code, country_code, segment
+from data_analytics.AD_01a_est_new_consumer) NC on A.partner_code = NC.partner_code
+left join (select partner_code, country_code, segment
+from data_analytics.AD_01d_est_retention_nc) RT on A.partner_code = RT.partner_code
+order by partner_code, priority, diff_M0_estimated asc;
+	
+------------------------------------------------------------
+--WHE TAKE ONLY THE 3 FIRST KPIS DEPENDING PRIORITY
+------------------------------------------------------------
+
+truncate table data_analytics.AD_03_setting_objs;
+--CREATE TABLE data_analytics.AD_03_setting_objs AS 
+insert into data_analytics.AD_03_setting_objs	
+select distinct partner_code ,country_code, months_age, maturity , metric, M1_M2_diff, segment, base_number, good, bad,
+	case when maturity = 'growth' and M1_M2_diff >= 20 then (case when metric in ('recurrence') then floor((base_number*10)*1.20)/10 else floor(base_number*1.15) end)
+		 when maturity = 'maturity' and M1_M2_diff >= 20 then (case when metric in ('recurrence') then floor((base_number*10)*1.05)/10 else floor(base_number*1.05) end)
+		 when maturity = 'growth' and M1_M2_diff < 20 then  (case when metric in ('recurrence') then floor((base_number*10)*1.05)/10 else floor(base_number*1.05) end)
+		 when maturity = 'maturity' and M1_M2_diff < 20 then (case when metric in ('recurrence') then floor((base_number*10))/10 else floor(base_number) end) end as M0,
+	case when maturity = 'growth' and M1_M2_diff >= 20 then (case when metric in ('recurrence') then floor((base_number*10)*1.20)/10 else floor(base_number*1.20) end)
+		 when maturity = 'maturity' and M1_M2_diff >= 20 then (case when metric in ('recurrence') then floor((base_number*10)*1.08)/10 else floor(base_number*1.08) end)
+		 when maturity = 'growth' and M1_M2_diff < 20 then  (case when metric in ('recurrence') then floor((base_number*10)*1.10)/10 else floor(base_number*1.10) end)
+		 when maturity = 'maturity' and M1_M2_diff < 20 then (case when metric in ('recurrence') then floor((base_number*10)*1.05)/10 else floor(base_number*1.05) end) end as M1,
+	case when maturity = 'growth' and M1_M2_diff >= 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.25)/10 else ceil(base_number*1.25) end)
+		 when maturity = 'maturity' and M1_M2_diff >= 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.10)/10 else ceil(base_number*1.10) end)
+		 when maturity = 'growth' and M1_M2_diff < 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.15)/10 else ceil(base_number*1.15) end)
+		 when maturity = 'maturity' and M1_M2_diff < 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.08)/10 else ceil(base_number*1.08) end) end as M2,
+	case when maturity = 'growth' and M1_M2_diff >= 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.30)/10 else ceil(base_number*1.30) end)
+		 when maturity = 'maturity' and M1_M2_diff >= 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.15)/10 else ceil(base_number*1.15) end)
+		 when maturity = 'growth' and M1_M2_diff < 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.20)/10 else ceil(base_number*1.20) end)
+		 when maturity = 'maturity' and M1_M2_diff < 20 then (case when metric = 'recurrence' then ceil((base_number*10)*1.12)/10 else ceil(base_number*1.12) end) end as M3
+from data_analytics.AD_02_priorization_objs
+where segment in ('bad','regular') 
+and maturity not in ('start','dark_store')
+and metric not in ('sales')
+and sp_action in (1)
+;	
+	
+	
+-----------------------------------------------------
+-- NOW WE HAVE THE OBJ THAT WE ARE GOING TO SHARE  
+-----------------------------------------------------
+	
+-----------------------------------------------------------------------------------------------------
+	
+-- OUTPUT PARTS 
+-- (OUTPUT1 =>  PART OF METRICS REAL OVER TIME + ESTIMATED)	
+-- (OUTPUT2 =>  OBJECTIVES ESPECIFICATED FOR EACH MONTH)	
+-- (OUTPUT3 =>  TEXT EXPLAINING INPUT)	
+	
+-----------------------------------------------------------------------------------------------------
+	
+	
+-------------------------------------------------------------
+-- OUTPUT 1 --
+-- ALL DATA RELATED WITH REAL VALUES AND ESTIMATED OVER TIME
+-------------------------------------------------------------
+
+truncate table data_analytics.AD_04a_view_main_metrics;
+--CREATE TABLE data_analytics.AD_04a_view_main_metrics AS 
+insert into data_analytics.AD_04a_view_main_metrics		
+select distinct 
+	A.country_code,
+	A.cntry_name,
+	A.partner_code,
+	A.deal_id, 
+	A.months_age,
+	MA.id_month,
+	A.Maturity,
+	A.tree,
+	A.dependence,
+	A."level",
+	A.metric,
+	cast(A.ddate as date) as ddate,
+	A.value,
+	A.avg_country,
+	A.column1,
+	A.column2,
+--	cast(null as decimal) as objective,
+	case when A.maturity = 'dark_store' then null
+		 when A.months_age > 24 and A.metric = 'total_consumer' then 292
+		 when A.months_age > 24 and A.metric = 'new_consumer' then 48
+		 when A.months_age > 24 and A.metric = 'recurrence' then 2
+		 when A.metric = 'avg_ticket' then (case when C.current_model > C.model then C.current_model else C.model end)
+		 when A.metric = 'retention_nc_1m' then 25 
+		 when A.metric = 'sales' then S.good
+		 else B.good end as estimated_max,
+	case when A.maturity = 'dark_store' then null
+		 when A.months_age > 24 and A.metric = 'total_consumer' then 175
+		 when A.months_age > 24 and A.metric = 'new_consumer' then 32
+		 when A.months_age > 24 and A.metric = 'recurrence' then 1.8
+		 when A.metric = 'avg_ticket' then (case when current_model > model then current_model else model end) - ((case when current_model > model then current_model else model end)*0.2)
+		 when A.metric = 'retention_nc_1m' then 20
+		 when A.metric = 'sales' then S.good
+		 else B.bad end as estimated_min
+from data_analytics.AD_00_main_metrics A
+left join (Select distinct partner_code, ddate, ((DATE_PART('year', ddate) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', ddate) - DATE_PART('month', gs_opening_date))) as id_month
+			from data_analytics.AD_00_main_metrics A
+			inner join (Select distinct gs_hubspot_deal_id as deal_id, gs_prtn_code,UPPER(gs_status) as gs_status ,gs_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_opening_date))) as months_age
+								from kpi_core.gainsight_partner 
+								where gs_prtn_code is not null
+									and UPPER(gs_status) = 'ACTIVE'
+									and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')
+								union (select gs_hubspot_deal_id as deal_id, gs_prtn_code, 'DARK_STORE' as gs_status, gs_dark_store_opening_date, ((DATE_PART('year', ex_date) - DATE_PART('year', gs_dark_store_opening_date)) * 12 + (DATE_PART('month', ex_date) - DATE_PART('month', gs_dark_store_opening_date))) as months_age
+											from kpi_core.gainsight_partner 
+											where gs_dark_store is true)) B on A.partner_code = B.gs_prtn_code			
+			order by partner_code, id_month) MA on A.partner_code = MA.partner_code and A.ddate = MA.ddate
+--inner join (select distinct partner_code from data_analytics.AD_00_main_metrics where ddate = date_trunc('month',ex_date)) P ON A.partner_code = P.partner_code
+left join (select * from data_analytics.ad_ext1_ideal_values where metric in ('total_consumer','new_consumer','recurrence')) B on MA.id_month = B.id_month and A.metric = B.metric
+left join (select A.ord_country_code as country_code, Round(avg(A.ord_total_products_price) ,2) as current_model, round(avg(cast(B.ct_avg_ticket as decimal)),2) as model
+			from kpi_core.kpi_order A
+			left join data_analytics.ad_ext2_avgticket_country B on A.ord_country_code = B.country_code
+			where ord_type_code = 'B2C' and lower(prtn_code) not like '%-ll%'
+			and (date_trunc('month',ex_date ) - interval '1' month) <= (date_trunc('month',A.ord_creation_date_time))
+			and date_trunc('month',A.ord_creation_date_time)  < (date_trunc('month',ex_date ))
+			group by A.ord_country_code ) C on A.country_code = C.country_code
+left join data_analytics.ad_01_est_sales S on A.partner_code = S.partner_code and A.ddate = S.ddate and A.metric = S.metric
+--left join (select distinct )
+where A.ddate <= date_trunc('month',ex_date- interval '1' month); 
+
+
+--------------------------------------------------------------
+-- OUTPUT 2 --
+-- ALL RELATED WITH THE OBJECTIVES AND STATUS FOR EACH METRIC		
+--------------------------------------------------------------
+			
+truncate table data_analytics.AD_04b_view_objectives;
+--CREATE TABLE data_analytics.AD_04b_view_objectives AS 
+insert into data_analytics.AD_04b_view_objectives		
+select distinct 
+A.partner_code,
+A.country_code,
+A.months_age,
+A.maturity,
+A.metric,
+A.m1_m2_diff as difference_1m_2m,
+A.base_number,
+cast(date_trunc('month',ex_date) as date) as m0_ddate,
+B.m0,
+case when m1 is not null then cast(date_trunc('month',ex_date +(interval '1' month)) as date) else null end as m1_ddate,
+round(B.m1,2) as m1,
+case when m1 is not null then cast(date_trunc('month',ex_date +(interval '2' month)) as date) else null end as m2_ddate,
+round(B.m2,2) as m2,
+case when m1 is not null then cast(date_trunc('month',ex_date +(interval '3' month)) as date) else null end as m3_ddate,
+round(B.m3,2) as m3,
+case when A.maturity = 'dark_store' then 'dark_store' else A.segment end as segment,
+A.sp_action,
+case when B.partner_code is null then 0 else 1 end as objective
+from data_analytics.AD_02_priorization_objs A
+--inner join (select distinct partner_code from DATA_ANALYTICS.AD_00_main_metrics where ddate = cast(date_trunc('month',ex_date)as date)) P ON A.partner_code = P.partner_code
+left join data_analytics.AD_03_setting_objs B on A.partner_code = B.partner_code and A.metric = B.metric
+order by A.country_code, A.partner_code, A.sp_action asc;
+
+
+--------------------------------------------------------------
+-- OUTPUT 3 --
+-- ALL RELATED WITH THE TEXT EXPLAINING	
+--------------------------------------------------------------
+			
+truncate table data_analytics.AD_04c_view_text_explaining;
+--CREATE TABLE data_analytics.AD_04c_view_text_explaining AS 
+insert into data_analytics.AD_04c_view_text_explaining		
+select distinct 
+A.partner_code,
+A.country_code,
+A.months_age,
+A.maturity,
+A.metric,
+case when A.Metric = 'total_consumer' then 'Total Consumers' 
+	 when A.Metric = 'new_consumer' then 'New Consumers'
+	 when A.Metric = 'avg_ticket' then 'Average Ticket'	
+	 when A.Metric = 'retention_nc_1m' then 'Retention'
+	 when A.Metric = 'recurrence' then 'Recurrence' 
+	 when A.Metric = 'sales' then 'Sales' end as desc_metric,
+value_last_month,
+last_estimated,
+round(case when A.maturity = 'dark_store' then null
+		 when A.months_age > 24 and A.metric = 'total_consumer' then 292
+		 when A.months_age > 24 and A.metric = 'new_consumer' then 48
+		 when A.months_age > 24 and A.metric = 'recurrence' then 2
+		 when A.metric = 'avg_ticket' then (case when CAT.current_model > CAT.model then CAT.current_model else CAT.model end)
+		 when A.metric = 'retention_nc_1m' then 25 
+		 when A.metric = 'sales' then A.good
+		 else VE.good end, 2) as estimated,
+CASE WHEN A.metric in('avg_ticket','sales') THEN C.cntry_currency_code 
+	 when A.metric = 'retention_nc_1m' then '%' 
+	 when A.metric = 'recurrence' then 'orders per customer' 
+	 	else null end as type_value,
+case when A.maturity = 'dark_store' then  'Dark Store' 
+	 when A.segment = 'good' then 'in line with expectations'
+	 when A.segment = 'regular' or (A.metric = 'sales' and A.segment = 'bad') then 'below the ideal value'
+	 when A.segment = 'bad' then 'far below the ideal value' 
+	 end as desc_segment,
+A.base_number,
+case when B.partner_code is null then 0 else 1 end as flag_objective,
+cast(date_trunc('month',ex_date) as date) as m0_ddate,
+B.m0,
+initcap(to_char(cast(date_trunc('month',ex_date +(interval '1' month)) as date),'month')) as m1_ddate,
+round(((case when value_last_month > 0 then (m1/value_last_month) - 1 else 1 end))*100) AS "diff_%_M1",
+round(B.m1,2) as m1,
+initcap(to_char(cast(date_trunc('month',ex_date +(interval '2' month)) as date),'month')) as m2_ddate,
+round(((case when value_last_month > 0 then (m2/value_last_month) - 1 else 1 end))*100) AS "diff_%_M2",
+round(B.m2,2) as m2,
+initcap(to_char(cast(date_trunc('month',ex_date +(interval '3' month)) as date),'month')) as m3_ddate,
+round(((case when value_last_month > 0 then (m3/value_last_month) - 1 else 1 end))*100) AS "diff_%_M3",
+round(B.m3,2) as m3,
+case when A.maturity = 'dark_store' then 'dark_store' else A.segment end as segment,
+A.sp_action
+from data_analytics.AD_02_priorization_objs A
+inner join (select distinct partner_code, metric, value AS value_last_month, estimated_max as last_estimated from data_analytics.ad_04a_view_main_metrics where ddate = cast(date_trunc('month',ex_date - (INTERVAL '1' MONTH))as date)) P ON A.partner_code = P.partner_code AND A.metric = P.metric
+left join data_analytics.AD_03_setting_objs B on A.partner_code = B.partner_code and A.metric = B.metric
+left join kpi_core.DIM_country C on A.country_code = C.cntry_code
+left join (select A.ord_country_code as country_code, Round(avg(A.ord_total_products_price) ,2) as current_model, round(avg(cast(B.ct_avg_ticket as decimal)),2) as model
+			from kpi_core.kpi_order A
+			left join data_analytics.ad_ext2_avgticket_country B on A.ord_country_code = B.country_code
+			where ord_type_code = 'B2C' and lower(prtn_code) not like '%-ll%'
+			and (date_trunc('month',ex_date) - interval '1' month) <= (date_trunc('month',A.ord_creation_date_time))
+			and date_trunc('month',A.ord_creation_date_time)  < (date_trunc('month',ex_date))
+			group by A.ord_country_code ) CAT on A.country_code = CAT.country_code
+left join (select * from data_analytics.ad_ext1_ideal_values where metric in ('total_consumer','new_consumer','recurrence')) VE on A.months_age = VE.id_month and A.metric = VE.metric
+order by A.country_code, A.partner_code, A.sp_action asc;
+
+
+
+---------------------------------------------------------------------------------------------		
+-- WE CREATE THE VIEWS IN ORDER TO HAVE	the results inside the schema tableau_extracts
+---------------------------------------------------------------------------------------------		
+	
+----VIEW FOR PAGE 1 MAIN DIAGNOSIS		
+/*
+create view tableau_extracts.advisor_diagnosis_page1 as 
+(select distinct
+A.partner_code, 
+A.country_code, 
+A.cntry_name,
+A.deal_id,
+A.months_age, 
+A.tree,
+A.dependence,
+A."level",
+A.metric,
+A.id_month, 
+A.maturity,
+A.ddate,
+A.value,
+A.avg_country,
+A.column1,
+A.column2,
+A.column3,
+A.estimated_max,
+A.estimated_min,
+B.difference_1m_2m,
+B.base_number,
+B.m0_ddate,
+B.m0,
+B.m1_ddate,
+B.m1,
+B.m2_ddate,
+B.m2,
+B.m3_ddate,
+B.m3,
+B.segment,
+B.sp_action,
+B.objective,
+C.desc_metric,
+C.value_last_month,
+last_estimated,
+C.estimated,
+C.type_value,
+C.desc_segment,
+C.flag_objective,
+C."diff_%_M1",
+C."diff_%_M2",
+C."diff_%_M3"
+from data_analytics.AD_04a_view_main_metrics A
+	inner join data_analytics.AD_04b_view_objectives B 
+		on A.partner_code = B.partner_code and A.country_code = B.country_code and A.metric = B.metric
+	inner join data_analytics.AD_04c_view_text_explaining C 
+		on B.partner_code = C.partner_code and B.country_code = C.country_code and B.metric = C.metric)
+;	
+
+-- Control table
+
+create view tableau_extracts.ad_ctrl_objective as
+(select distinct
+A.*,
+(total_consumers_obj + avg_ticket_obj + recurrence_obj) as obj_lvl_2,
+(new_consumer_obj + retention_obj) as obj_lvl_3,
+(total_consumers_obj + avg_ticket_obj + recurrence_obj) + (new_consumer_obj + retention_obj) as total_obj
+from
+(
+select 
+A.partner_code,
+A.maturity,
+A.country_code,
+A.deal_id,
+max(case when S.metric = 'sales' then S.segment end) as sales_diag,
+max(case when A.metric = 'total_consumer' then A.segment end) as total_consumers_diag,
+max(case when A.metric = 'total_consumer' then A.flag_objective end) as total_consumers_obj,
+max(case when A.metric = 'avg_ticket' then A.segment end) as avg_ticket_diag,
+max(case when A.metric = 'avg_ticket' then A.flag_objective end) as avg_ticket_obj,
+max(case when A.metric = 'recurrence' then A.segment end) as recurrence_diag,
+max(case when A.metric = 'recurrence' then A.flag_objective end) as recurrence_obj,
+max(case when A.metric = 'new_consumer' then A.segment end) as new_consumer_diag,
+max(case when A.metric = 'new_consumer' then A.flag_objective end) as new_consumer_obj,
+max(case when A.metric = 'retention_nc_1m' then A.segment end) as retention_diag,
+max(case when A.metric = 'retention_nc_1m' then A.flag_objective end) as retention_obj
+from tableau_extracts.advisor_diagnosis_page1 A 
+left join data_analytics.ad_01_est_sales S on A.partner_code = S.partner_code and A.ddate = S.ddate
+where A.ddate = date_trunc('month', now()::date - interval '1' month)
+group by 
+A.partner_code,
+A.country_code,
+A.maturity,
+A.deal_id) A);
+*/
+
+
+/*
+$procedure$
+;
+*/
+
+
+------COST OVER SALES MAIN HISTORIC TABLE
+Truncate table data_analytics.AD_06_main_costs;
+--create table data_analytics.AD_06_main_costs as
+insert into data_analytics.AD_06_main_costs
+select distinct
+A.country_code,
+CO.cntry_name,
+A.partner_code,
+gs_hubspot_deal_id as deal_id,
+months_age,
+case when months_age < 0 then 'dark_store'
+	 when months_age < 4 then 'start' 
+	 when months_age <= 12 then 'growth' 
+	 else 'maturity' end as maturity,
+case when A.type_cost in ('rent','personal') then 'fix_cost' else 'variable_cost' end as dependence,
+'outcomes' as tree,
+'3' as "level",
+A.type_cost as metric,
+ddate,
+cost_over_sale as value,
+null as avg_country,
+sales as column_1,
+cost_value as column_2,
+is_prediction as column_3
+from
+	(select A.country as country_code, A.partner as partner_code, A.month_dt as ddate, max(is_prediction) as is_prediction, '3' as "level", 
+			case when type_of_cost = 'gas' or type_of_cost = 'lights' then 'energy-gas'
+	 		when type_of_cost = 'dry_cleaner_and_washer' then 'dry-clean'
+	 		when type_of_cost = 'daily_use_products' then 'packaging'
+	 		when type_of_cost = 'washing_products' then 'chemicals'
+	 		else type_of_cost end as type_cost,
+	 		sales,
+			sum(round(cast("final" as decimal),2)) as cost_value,
+		round(cast((sum(round(cast("final" as decimal),2))/nullif(sales,0)) as decimal)*100,2) as cost_over_sale 
+	from
+		(select * from wip.partner_hub_costs 	
+			where type_of_cost in ('rent', 'personal', 'daily_use_products','dry_cleaner_and_washer','gas','lights','logistics','washing_products','water')) A
+		inner join
+		(select distinct 
+			partner_code,  sum(value_local_currency) sales, cast(date_trunc('month',ddate) as date) as month_dt
+			from kpi_core.kpi_scorecard_income A
+			where periodicity = 'daily'
+			and metric = 'sales'
+			group by partner_code, date_trunc('month',ddate)) B on A.partner = B.partner_code and A.month_dt = B.month_dt
+	group by A.country, A.partner , A.month_dt,
+			case when type_of_cost = 'gas' or type_of_cost = 'lights' then 'energy-gas'
+	 		when type_of_cost = 'dry_cleaner_and_washer' then 'dry-clean'
+	 		when type_of_cost = 'daily_use_products' then 'packaging'
+	 		when type_of_cost = 'washing_products' then 'chemicals'
+	 		else type_of_cost end, 
+			sales
+	) A
+left join (Select distinct gs_hubspot_deal_id ,gs_prtn_code ,gs_opening_date, ((DATE_PART('year', now()::date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', now()::date) - DATE_PART('month', gs_opening_date))) as months_age
+			from kpi_core.gainsight_partner 
+			where gs_prtn_code is not null
+			and gs_opening_date is not null
+			and UPPER(gs_status) = 'ACTIVE'
+			and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')) D on gs_prtn_code = A.partner_code
+left join kpi_core.dim_country CO on CO.country_id = A.country_code 
+where months_age > 4 
+	and A.ddate >= date_trunc('month',now()::date - interval '12' month) -- at least we get 1 year ago
+	and A.ddate < date_trunc('month',now()::date);
+
+
+--the comparison table of variable cost have differents labels so we update them
+update data_analytics.ad_ext1_ideal_values 
+set metric = lower(metric)
+where tree = 'outcomes' and "level" = '3';
+update data_analytics.ad_ext1_ideal_values 
+set metric = 'energy-gas'
+where metric = 'energy + gas';
+update data_analytics.ad_ext1_ideal_values 
+set metric = 'logistics'
+where metric = 'logistic';
+
+
+--- Comparison fase
+truncate table data_analytics.ad_07_est_variable_costs;
+--CREATE TABLE data_analytics.AD_07_est_variable_costs AS 
+insert into data_analytics.ad_07_est_variable_costs
+select distinct 
+A.country_code, partner_code, maturity, months_age, A.metric, month_3, month_2, month_1, Good, bad, M1_M2_diff, M2_M3_diff,
+(M1_M2_diff + M2_M3_diff)/2 as avg_diff,
+case when month_1 >= bad then 'bad'
+	 when month_1 >= good then 'regular'
+	 else 'good' end as segment
+FROM 	
+	(select country_code, partner_code, maturity, months_age, metric,
+         max(case when (ddate= date_trunc('month',ex_date - interval '3' month)) then value else 0 end) as month_3,
+         max(case when (ddate= date_trunc('month',ex_date- interval '2' month)) then value else 0 end) as month_2,
+         max(case when (ddate= date_trunc('month',(ex_date)- interval '1' month)) then value else 0 end) as month_1,
+         case when max(case when (ddate= date_trunc('month',(ex_date)- interval '2' month)) then value else 0 end) > 0
+         		-- ((month_1 - month_2) / month_2)
+         		then round((max(case when (ddate= date_trunc('month',(ex_date) - interval '1' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',(ex_date) - interval '2' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',(ex_date) - interval '2' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',(ex_date) - interval '1' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m1_m2_diff,  
+         case when max(case when (ddate= date_trunc('month',(ex_date) - interval '3' month)) then value else 0 end) > 0
+         		-- ((month_2 - month_3) / month_3)
+         		then round((max(case when (ddate= date_trunc('month',(ex_date) - interval '2' month)) then value else 0 end) -
+          		max(case when (ddate= date_trunc('month',(ex_date) - interval '3' month)) then value else 0 end))/
+          		max(case when (ddate= date_trunc('month',(ex_date) - interval '3' month)) then value else 0 end)*100 , 2)
+         	  when max(case when (ddate= date_trunc('month',(ex_date) - interval '2' month)) then value else 0 end) = 0
+         	    then 0
+         	    else 100 end as m2_m3_diff   
+         	    from data_analytics.ad_06_main_costs
+         where ddate >= date_trunc('month',(ex_date)- interval '3' month)
+         group by country_code, partner_code, maturity, months_age, metric
+         order by country_code, partner_code, maturity, months_age, metric) A
+inner join (select distinct * from data_analytics.ad_ext1_ideal_values where tree = 'outcomes' and "level" = '3') B on A.country_code = B.country_code and A.metric = B.metric
+order by country_code, partner_code;
+
+
+--- WE SET THE OBJECTIVES FOR COST
+truncate table data_analytics.AD_08_cost_objectives;
+--CREATE TABLE data_analytics.AD_08_cost_objectives as
+insert into data_analytics.AD_08_cost_objectives
+select distinct
+    A.country_code,
+	partner_code,
+	maturity,
+	A.metric,
+	month_3,
+	month_2,
+	month_1,
+	good,
+	bad,
+	m1_m2_diff,
+	m2_m3_diff,
+	avg_diff,
+	segment,
+cast(date_trunc('month',ex_date +(interval '1' month)) as date) as m1_ddate,
+Round(case when segment = 'regular' then good
+	 when segment = 'bad' and month_1 >= 50 then 25
+	 when segment = 'bad' and month_1/2 >= bad then month_1/2
+	 else good end,2) as M2,
+cast(date_trunc('month',ex_date +(interval '2' month)) as date) as m2_ddate,
+round((month_1+(case when segment = 'regular' then good
+	 when segment = 'bad' and month_1 >= 50 then 25
+	 when segment = 'bad' and month_1/2 >= bad then month_1/2
+	 else good end))/2 ,2)as M1
+from data_analytics.ad_07_est_variable_costs A
+where segment in ('regular','bad');
+
+
+----We create the output for costs
+truncate table data_analytics.ad_09_view_costs;
+--CREATE TABLE data_analytics.ad_09_view_costs as
+insert into data_analytics.ad_09_view_costs
+select distinct
+A.partner_code,
+A.country_code,
+A.cntry_name,
+A.months_age,
+A.maturity,
+A.metric,
+A.ddate,
+case when A.value >= D.bad then 'bad'
+	 when A.value >= D.good then 'regular'
+	 else 'good' end as segment_by_month,
+case when A.value >= D.bad then 'much higher than expected'
+	 when A.value >= D.good then 'higher than expected'
+	 else 'in line with expectations' end as desc_segment,
+A.column_1 as sales,
+A.column_2 as cost_value,
+A.column_3 as is_prediction, 
+CO.cntry_currency_code,
+A.value,
+Coalesce(B.segment,'good') as segment,
+AC.avg_country,
+D.good,
+D.bad,
+B.m1_m2_diff,
+B.m2_m3_diff,
+m1_ddate,
+round(((m1/(case when month_1 is null or month_1 = 0 then 0.001 else month_1 end)) - 1 )*100) AS "diff_%_M1",
+round(B.m1,2) as m1,
+m2_ddate,
+round(((m2/(case when month_1 is null or month_1 = 0 then 0.001 else month_1 end)) - 1 )*100) AS "diff_%_M2",
+round(B.m2,2) as m2
+from data_analytics.AD_06_main_costs A
+left join (select * from data_analytics.ad_ext1_ideal_values where tree ='outcomes' and "level" = '3') D on A.country_code = D.country_code and A.metric = D.metric 
+left join data_analytics.AD_08_cost_objectives B 
+		on A.partner_code = B.partner_code and A.country_code = B.country_code and A.metric = B.metric
+left join (
+	select avg(value) avg_country, country_code, metric  
+	from data_analytics.ad_06_main_costs
+	where column_3 = 0
+	and ddate = date_trunc('month',ex_date - interval '1' month)
+	group by country_code, metric) AC on A.country_code = AC.country_code and A.metric = AC.metric	
+left join kpi_core.dim_country CO on CO.country_id = A.country_code 
+inner Join (select distinct partner_code from data_analytics.AD_06_main_costs where ddate = date_trunc('month',ex_date - interval '1' month)) E on A.partner_code = E.partner_code
+;	
+	
+/*
+create view tableau_extracts.advisor_diagnosis_page2 as
+select distinct * from data_analytics.ad_09_view_costs;
+*/
+
+
+-----------------------------------------------------------------------------------------------
+-- Additional PAGE OF TABLEAU 
+------------------------------------------------------------
+-- INFO ABOUT THE SECONDARY METRICS (TOTAL SUMMARIZE)
+-------------------------------------------------------------
+
+-- WE GET SECONDARY METRICS IN ORDER TO HAVE MORE CONTEXT ABOUT THE INFO
+-- Max closed year
+truncate table data_analytics.AD_05a_view_sec_metrics;
+--Create Table data_analytics.AD_05a_view_sec_metrics as
+insert into data_analytics.AD_05a_view_sec_metrics
+select distinct	
+A.country_code, 
+A.partner_code, 
+months_age,
+case when months_age < 0 then 'dark_store'
+	 when months_age < 4 then 'start' 
+	 when months_age <= 12 then 'growth' 
+	 else 'maturity' end as maturity,
+--upper(m_segment) as sub_metric,	 
+metric, 
+cast(ddate as date) ddate, 
+round(value,1) as TOT_Value
+from (
+/*WE CAN INCLUDE ANOTHERS METRICS WITH UNION*/
+/*Get Num orders Online*/
+(select distinct partner_code, country_code,'num_orders' as metric, date_trunc('month', ddate) ddate, sum(value) as value
+				from kpi_core.kpi_scorecard_operative
+				where periodicity = 'daily'	
+				and vertical_code = 'LAUNDRY'
+				and metric in ('num_ords')
+				group by partner_code, country_code, metric, date_trunc('month', ddate)) 				
+/*Get New and num_Subscriptions*/
+/*union (select distinct partner_code, country_code,'value' as m_segment, case metric when 'num_subscriptions' then 'total_subscriptions' else metric end as metric, date_trunc('month', ddate) ddate, sum(value) as value
+				from kpi_core.kpi_scorecard_operative 
+				where periodicity = 'daily'
+				and vertical_code = 'LAUNDRY'
+				and metric in ('new_subscriptions','num_subscriptions')
+				group by partner_code, country_code, metric, date_trunc('month', ddate)) */ -- Cheking if the metric is ok
+/*Get Sales*/
+union (select distinct partner_code, country_code, metric, date_trunc('month', ddate) ddate, sum(value_local_currency) as value
+				from kpi_core.kpi_scorecard_income			
+				where periodicity = 'daily'
+				and vertical_code = 'LAUNDRY'
+				and metric in  ('sales','discount','upselling','gmv') --GMV was dropped by no show in dashboard
+				group by partner_code, country_code, metric, date_trunc('month', ddate)) 
+/*Get Rating*/
+union (SELECT distinct prtn_code as partner_code, ord_country_code as country_code, 'rating' as metric, date_trunc('month',ord_order_date_time) as ddate,Round(avg(ord_last_rating_value),2)as value
+				from dwh.kpi_core.kpi_order 
+				where vertical_code = 'LAUNDRY'
+				group by prtn_code, ord_country_code, date_trunc('month',ord_order_date_time))
+/*Get Mix service*/
+union (select distinct A.prtn_code as partner_code, A.ord_country_code as country_code, 'mix_service' as metric, date_trunc('month',A.ord_prct_creation_date_time) as ddate, count(A.order_id)
+				from kpi_core.kpi_order_product  A		
+				LEFT JOIN kpi_core.kpi_order B ON A.ord_src_id = B.ord_src_id
+				where A.vertical_code = 'LAUNDRY'
+				and A.ord_status_code <> 'CANCELLED'
+				group by A.prtn_code, A.ord_country_code, date_trunc('month',A.ord_prct_creation_date_time))
+/*Get COUPON REDEMPTION*/
+union (select distinct cust_last_partner_code as partner_code, ord_country_code as country_code, 'coupon_redemption' as metric,  date_trunc('month',ord_creation_date_time) as ddate, count(distinct A.order_id)
+				from kpi_core.kpi_coupon_redemption A	
+				inner join (select distinct order_id from kpi_core.kpi_order where ord_type_code = 'B2C') B on A.order_id = B.order_id
+				group by cust_last_partner_code, ord_country_code, date_trunc('month',ord_creation_date_time))	
+/*Get CHATBOT CAMPAIGNS*/
+union (select A.partner_code, A.country_code, 'chatbot_campaigns' as metric, A.month_dt, coalesce(count(B."Nombre Punto"),0) as value
+				from kpi_core.operative_partners_monthly A
+				left join data_analytics.chatbot_csv B on A.partner_code = B."Nombre Punto" and A.month_dt = date_trunc('month',TO_DATE(B."Fecha lanzamiento", 'DD/MM/YYYY'))
+				group by A.partner_code, A.country_code, A.month_dt)) A	
+inner join (Select distinct gs_prtn_code ,gs_opening_date, ((DATE_PART('year', now()::date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', now()::date) - DATE_PART('month', gs_opening_date))) as months_age
+			from kpi_core.gainsight_partner 
+			where gs_prtn_code is not null
+			and gs_opening_date is not null
+			and UPPER(gs_status) = 'ACTIVE'
+			and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')) C on gs_prtn_code = A.partner_code			
+/*Filter of time*/
+	where ddate >= date_trunc('month',(now()::date)- interval '13' month) and ddate < date_trunc('month',(now()::date)) -- at least we get 1 year ago
+		and ddate > date_trunc('month',gs_opening_date); -- before opening date (for some examples)
+
+		
+----------------------------------------------------------------------
+-- Output to JOIN SPLITS VALUES CATEGORIES ON SUMMARIZE VALUES
+----------------------------------------------------------------------
+	
+-- WE GET SECONDARY METRICS IN ORDER TO HAVE MORE CONTEXT ABOUT THE INFO
+-- Max closed year
+truncate table data_analytics.AD_05b_view_sec_metrics_split;
+--Create Table data_analytics.AD_05b_view_sec_metrics_split as
+insert into data_analytics.AD_05b_view_sec_metrics_split		
+select distinct		
+partner_code,
+country_code,
+metric,
+cast(ddate as date) as ddate,
+split, 
+round(value,1) as split_value
+from (
+/*Get Chatbot Campaigns*/
+select distinct A.partner_code, A.country_code, 'chatbot_campaigns' as metric, A.month_dt as ddate, coalesce(B.canal,'null') as split , coalesce(count(B."Nombre Punto"),0) as value
+				from kpi_core.operative_partners_monthly A
+				left join data_analytics.chatbot_csv B on A.partner_code = B."Nombre Punto" and A.month_dt = date_trunc('month',TO_DATE(B."Fecha lanzamiento", 'DD/MM/YYYY'))
+				group by A.partner_code, A.country_code, coalesce(B.canal,'null') , A.month_dt
+/*Get Orders*/
+union (select distinct partner_code, country_code,'num_orders' as metric, date_trunc('month', ddate) ddate, case when metric = 'num_orders_online' then 'ONLINE' else 'OFFLINE' end as split, sum(value) as value
+				from kpi_core.kpi_scorecard_operative
+				where periodicity = 'daily'	
+				and vertical_code = 'LAUNDRY'
+				and metric in ('num_orders_online','num_orders_offline')
+				group by partner_code, country_code, metric, date_trunc('month', ddate))
+/*Get Sales*/
+union (select distinct A.partner_code, A.country_code,'sales' as metric, A.month_dt ddate, coalesce(B.ord_channel_type_code, 'null') as split, coalesce(sum(B.sales),0) as value
+				from kpi_core.kpi_purchase B 
+				right join kpi_core.operative_partners_monthly A on A.partner_code = B.partner_code and  A.month_dt = date_trunc('month', B.ddate)
+				group by A.partner_code, A.country_code, coalesce(B.ord_channel_type_code, 'null'), A.month_dt)
+/*Get Discount*/
+union (select distinct A.partner_code, A.country_code,'discount' as metric, date_trunc('month', A.month_dt) ddate, coalesce(B.ord_channel_type_code, 'null') as split, coalesce(sum(B.discount),0) as value
+				from kpi_core.kpi_purchase B
+				right join kpi_core.operative_partners_monthly A on A.partner_code = B.partner_code and A.month_dt = date_trunc('month', B.ddate)
+				group by A.partner_code, A.country_code, coalesce(B.ord_channel_type_code, 'null'), A.month_dt)
+/*Get Upselling*/
+union (select distinct A.partner_code, A.country_code,'upselling' as metric, date_trunc('month', A.month_dt) ddate, coalesce(B.ord_channel_type_code, 'null') as split, coalesce(sum(B.upselling),0) as value
+				from kpi_core.kpi_purchase B
+				right join kpi_core.operative_partners_monthly A on A.partner_code = B.partner_code and A.month_dt = date_trunc('month', B.ddate)
+				group by A.partner_code, A.country_code, coalesce(B.ord_channel_type_code, 'null'), A.month_dt)		
+/*Get Rating*/
+union (SELECT distinct prtn_code as partner_code, ord_country_code as country_code, 'rating' as metric, date_trunc('month',ord_order_date_time) as ddate, cast(ord_last_rating_value as text) as split,Round(Count(ord_last_rating_id),2)as value
+				from dwh.kpi_core.kpi_order 
+				where vertical_code = 'LAUNDRY'
+				and ord_last_rating_value <> 0
+				group by prtn_code, ord_country_code,ord_last_rating_value, date_trunc('month',ord_order_date_time))	
+/*Get COUPON REDEMPTION*/
+union (select distinct cust_last_partner_code as partner_code, ord_country_code as country_code, 'coupon_redemption' as metric, date_trunc('month',ord_creation_date_time) as ddate, ord_channel_type_code as split, count(distinct A.order_id)
+				from kpi_core.kpi_coupon_redemption A	
+				inner join (select distinct order_id, ord_channel_type_code from kpi_core.kpi_order where ord_type_code = 'B2C') B on A.order_id = B.order_id
+				group by cust_last_partner_code, ord_country_code,ord_channel_type_code, date_trunc('month',ord_creation_date_time))			
+/*Get Mix service*/
+union (select distinct A.prtn_code as partner_code, A.ord_country_code as country_code, 'mix_service' as metric, date_trunc('month',A.ord_prct_creation_date_time) as ddate, prct_type_code as split, count(A.order_id)
+				from kpi_core.kpi_order_product  A		
+				LEFT JOIN kpi_core.kpi_order B ON A.ord_src_id = B.ord_src_id
+				where A.vertical_code = 'LAUNDRY'
+				and A.ord_status_code <> 'CANCELLED'
+				and prct_type_code not in ('UNCATEGORIZED','SUBSCRIPTION')
+				group by A.prtn_code, A.ord_country_code, prct_type_code, date_trunc('month',A.ord_prct_creation_date_time))				
+				) A
+inner join (Select distinct gs_prtn_code ,gs_opening_date, ((DATE_PART('year', now()::date) - DATE_PART('year', gs_opening_date)) * 12 + (DATE_PART('month', now()::date) - DATE_PART('month', gs_opening_date))) as months_age
+			from kpi_core.gainsight_partner 
+			where gs_prtn_code is not null
+			and gs_opening_date is not null
+			and UPPER(gs_status) = 'ACTIVE'
+			and UPPER(gs_stage) in ('START','GROWTH','MATURITY','TRANSFER')) C on gs_prtn_code = A.partner_code					
+where ddate >= date_trunc('month',(now()::date)- interval '13' month) and ddate < date_trunc('month',(now()::date)) -- at least we get 1 year ago
+		and ddate > date_trunc('month',gs_opening_date); -- before opening date (for some examples)		
+
+		
+select  partner_code , tot_value, country_code  from tableau_extracts.additional_metrics_page1 where metric = 'rating' and ddate = '2022-05-01';	
+select distinct * from kpi_core.kpi_scorecard_board_metric where ddate > '2022-0-01' and metric = 'avg_service_quality' and periodicity = 'monthly'
+
+	/*
+----VIEW FOR PAGE 2 SECONDARY METRICS
+create view tableau_extracts.additional_metrics_page1 as 
+select distinct
+A.partner_code,
+A.country_code,
+A.months_age,
+A.maturity,
+A.metric,
+A.ddate,
+A.tot_value,
+B.split,
+B.split_value
+from data_analytics.AD_05a_view_sec_metrics A
+	inner join data_analytics.AD_05b_view_sec_metrics_split B 
+		on A.partner_code = B.partner_code and A.country_code = B.country_code and A.metric = B.metric and A.ddate = B.ddate
+right kpi_core.operative_partners_monthly A		
+*/		
+		
+/*
+----------------------------------------------------------------		
+---BCK procedure		
+----------------------------------------------------------------
+--create table data_analytics.ad_00_historic_data as
+insert into data_analytics.ad_00_historic_data
+select cast(date_trunc('month',now()::date - interval '1' month) as date) as date_bck, A.* from tableau_extracts.advisor_diagnosis_page1 A
+where ddate = date_trunc('month',now()::date - interval '2' month)
+*/
+		
+	
+select admin.reset_permissions()
