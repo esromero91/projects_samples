@@ -1,0 +1,54 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from bs4 import BeautifulSoup
+import time
+
+# Configuramos las opciones de Selenium y el servicio de ChromeDriver
+options = Options()
+#options.add_argument("--headless")
+
+# Definimos la URL del sitio web y el origen y destino del vuelo
+url = "https://www.kiwi.com/es/buscar/results/barcelona-espana/paris-francia/anytime/no-return"
+
+# Iniciamos un navegador con Selenium
+service = Service("C:/Users/erome/Downloads/chromedriver_win32/chromedriver.exe")
+driver = webdriver.Chrome(service=service, options=options)
+
+# Abrimos la URL en el navegador
+driver.get(url)
+
+# Esperamos a que la página cargue completamente
+time.sleep(5)
+
+# Aceptar las cookies (si existen)
+try:
+    driver.find_element(By.CSS_SELECTOR, "button[data-test='CookiesPopup-Accept']").click()
+except:
+    pass
+
+# Esperamos a que haya al menos 10 precios en la página
+wait = WebDriverWait(driver, 10)
+wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "strong[data-test='ResultCardPrice']")))
+
+# Hacemos scroll down 3 veces para cargar más resultados
+driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+wait.until(EC.presence_of_all_elements_located((By.CSS_SELECTOR, "strong[data-test='ResultCardPrice']")))
+
+# Parseamos el contenido de la página con BeautifulSoup
+soup = BeautifulSoup(driver.page_source, "html.parser")
+
+# Buscamos los precios de los vuelos utilizando selectores CSS y los guardamos en una lista
+prices = [price.text for price in soup.select("strong[data-test='ResultCardPrice']")[:10]]
+
+# Convertimos los precios a valores numéricos
+prices = [float(price.replace("€", "").replace(",", ".")) for price in prices]
+
+# Cerramos el navegador
+driver.quit()
+
+# Imprimimos los precios de los vuelos
+print(prices)
